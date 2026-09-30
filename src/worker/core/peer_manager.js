@@ -315,7 +315,7 @@ export class PeerManager {
       this.peerInfosByGroup.delete(groupKey);
       this.peerConnVersions.delete(groupKey);
     }
-    return true;
+    return !!wasPresent;
   }
 
   getPeerWs(peerId, groupKey) {

@@ -7,16 +7,10 @@ const WS_OPEN = (typeof WebSocket !== 'undefined' && WebSocket.OPEN) ? WebSocket
 export function handleHandshake(ws, header, payload, types, peerManager) {
   try {
     const req = types.HandshakeRequest.decode(payload);
-    try {
-      const dig = req.networkSecretDigrest ? Buffer.from(req.networkSecretDigrest) : Buffer.alloc(0);
-      console.log(`Handshake networkSecretDigest(hex)=${dig.toString('hex')}`);
-    } catch (_) {
-      // ignore
-    }
 
     if (req.magic !== MAGIC) {
-      console.error('Invalid magic');
-      ws.close();
+      console.warn({ event: 'websocket_server_close', code: 1008, reason: 'invalid magic', peerId: req.myPeerId, serverSessionId: ws.serverSessionId });
+      ws.close(1008, 'invalid magic');
       return;
     }
 
@@ -26,8 +20,15 @@ export function handleHandshake(ws, header, payload, types, peerManager) {
     const networkDigestRegistry = peerManager.networkDigestRegistry;
     const existingDigest = networkDigestRegistry.get(clientNetworkName);
     if (existingDigest && existingDigest !== digestHex) {
-      console.error(`Rejecting handshake from ${req.myPeerId}: digest mismatch for network "${clientNetworkName}" (existing=${existingDigest}, incoming=${digestHex})`);
-      ws.close();
+      console.warn({
+        event: 'websocket_server_close',
+        code: 1008,
+        reason: 'network secret mismatch',
+        peerId: req.myPeerId,
+        serverSessionId: ws.serverSessionId,
+        networkName: clientNetworkName,
+      });
+      ws.close(1008, 'network secret mismatch');
       return;
     }
     if (!existingDigest) {
@@ -62,6 +63,12 @@ export function handleHandshake(ws, header, payload, types, peerManager) {
     });
     pm.setPublicServerFlag(true);
     ws.crypto = { enabled: false };
+    console.log({
+      event: 'easytier_handshake_accepted',
+      peerId: req.myPeerId,
+      serverSessionId: ws.serverSessionId,
+      networkName: clientNetworkName,
+    });
 
     const respBuffer = types.HandshakeRequest.encode(respPayload).finish();
     const respHeader = createHeader(MY_PEER_ID, req.myPeerId, PacketType.HandShake, respBuffer.length);
@@ -86,8 +93,8 @@ export function handleHandshake(ws, header, payload, types, peerManager) {
     }, 50);
 
   } catch (e) {
-    console.error('Handshake error:', e);
-    ws.close();
+    console.error({ event: 'websocket_server_close', code: 1011, reason: 'handshake error', serverSessionId: ws.serverSessionId, error: e.stack || e.message });
+    ws.close(1011, 'handshake error');
   }
 }
 

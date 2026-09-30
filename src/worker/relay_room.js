@@ -58,18 +58,34 @@ export class RelayRoom {
         console.warn('[ws] unsupported message type', typeof message);
         return;
       }
-      console.log(`[ws] recv len=${buffer.length}`);
-      ws.lastSeen = Date.now();
+      const now = Date.now();
+      ws.lastSeen = now;
       const header = parseHeader(buffer);
       if (!header) {
-        console.error('[ws] parseHeader failed, raw hex=', buffer.toString('hex'));
+        console.error({
+          event: 'websocket_invalid_packet',
+          peerId: ws.peerId,
+          serverSessionId: ws.serverSessionId,
+          networkName: ws.domainName,
+          length: buffer.length,
+          reason: 'header_too_short',
+        });
         return;
       }
-      console.log(`[ws] header from=${header.fromPeerId} to=${header.toPeerId} type=${header.packetType} len=${header.len}`);
+      if (header.packetType !== PacketType.Ping && header.packetType !== PacketType.Data) {
+        console.log({
+          event: 'websocket_packet',
+          peerId: ws.peerId,
+          serverSessionId: ws.serverSessionId,
+          fromPeerId: header.fromPeerId,
+          toPeerId: header.toPeerId,
+          packetType: header.packetType,
+          payloadLength: header.len,
+        });
+      }
       const payload = buffer.subarray(HEADER_SIZE);
       switch (header.packetType) {
         case PacketType.HandShake:
-          console.log(`[ws] -> handleHandshake payload hex=${payload.toString('hex')}`);
           handleHandshake(ws, header, payload, this.types, this.peerManager);
           break;
         case PacketType.Ping:
@@ -110,42 +126,106 @@ export class RelayRoom {
           }
           handleForwarding(ws, header, buffer, this.types, this.peerManager);
       }
+
+      // Refresh the hibernation attachment after the handshake assigns peer
+      // metadata, and periodically thereafter for useful diagnostics.
+      if (header.packetType === PacketType.HandShake || now - ws.lastPersistedAt >= 60_000) {
+        this._persistSocket(ws);
+      }
     } catch (e) {
-      console.error('relay_room message handling error:', e);
+      console.error({
+        event: 'websocket_server_close',
+        peerId: ws.peerId,
+        serverSessionId: ws.serverSessionId,
+        networkName: ws.domainName,
+        code: 1011,
+        reason: 'internal error',
+        error: this._formatError(e),
+      });
       try { ws.close(1011, 'internal error'); } catch (_) { }
     }
   }
 
-  async webSocketClose(ws) {
-    if (ws.peerId) {
-      const groupKey = ws.groupKey;
-      const removed = this.peerManager.removePeer(ws);
-      if (removed) {
-        try {
-          this.peerManager.broadcastRouteUpdate(this.types, groupKey);
-        } catch (_) { }
-      }
-    }
+  async webSocketClose(ws, code, reason, wasClean) {
+    const now = Date.now();
+    console.log({
+      event: 'websocket_close',
+      peerId: ws.peerId,
+      serverSessionId: ws.serverSessionId,
+      networkName: ws.domainName,
+      code,
+      reason: reason || '',
+      wasClean: !!wasClean,
+      connectedAt: ws.connectedAt,
+      lastSeen: ws.lastSeen,
+      lifetimeMs: ws.connectedAt ? now - ws.connectedAt : null,
+      idleMs: ws.lastSeen ? now - ws.lastSeen : null,
+    });
+    this._removeSocket(ws);
   }
 
-  async webSocketError(ws) {
-    await this.webSocketClose(ws);
+  async webSocketError(ws, error) {
+    console.error({
+      event: 'websocket_error',
+      peerId: ws.peerId,
+      serverSessionId: ws.serverSessionId,
+      networkName: ws.domainName,
+      connectedAt: ws.connectedAt,
+      lastSeen: ws.lastSeen,
+      error: this._formatError(error),
+    });
+    this._removeSocket(ws);
   }
 
   _initSocket(ws, meta = {}) {
+    const now = Date.now();
     ws.peerId = meta.peerId || null;
     ws.groupKey = meta.groupKey || null;
     ws.domainName = meta.domainName || null;
-    ws.lastSeen = Date.now();
+    ws.connectedAt = meta.connectedAt || now;
+    ws.lastSeen = meta.lastSeen || now;
+    ws.lastPersistedAt = now;
     ws.serverSessionId = meta.serverSessionId || randomU64String();
-    ws.weAreInitiator = false;
+    ws.weAreInitiator = meta.weAreInitiator || false;
     ws.crypto = { enabled: false };
+    this._persistSocket(ws);
+  }
+
+  _persistSocket(ws) {
+    ws.lastPersistedAt = Date.now();
     ws.serializeAttachment?.({
       peerId: ws.peerId,
       groupKey: ws.groupKey,
       domainName: ws.domainName,
+      connectedAt: ws.connectedAt,
+      lastSeen: ws.lastSeen,
       serverSessionId: ws.serverSessionId,
+      weAreInitiator: ws.weAreInitiator,
     });
+  }
+
+  _removeSocket(ws) {
+    if (!ws.peerId) return;
+    const groupKey = ws.groupKey;
+    const removed = this.peerManager.removePeer(ws);
+    if (!removed) return;
+    try {
+      this.peerManager.broadcastRouteUpdate(this.types, groupKey);
+    } catch (e) {
+      console.error({
+        event: 'route_update_after_disconnect_failed',
+        peerId: ws.peerId,
+        serverSessionId: ws.serverSessionId,
+        networkName: ws.domainName,
+        error: this._formatError(e),
+      });
+    }
+  }
+
+  _formatError(error) {
+    if (!error) return 'unknown error';
+    if (error instanceof Error) return error.stack || error.message;
+    return String(error);
   }
 
   _restoreSocket(ws) {
