@@ -18,11 +18,22 @@ export class RelayRoom {
     this.peerManager = new PeerManager();
     this.peerManager.setTypes(this.types);
 
-    // Restore sockets after hibernation to keep metadata
-    this.state.getWebSockets().forEach((ws) => this._restoreSocket(ws));
+    // Clients retain topology versions across reconnects. Restore the relay's
+    // identity and counters before rebuilding its socket registry.
+    const restoreSockets = () => this.state.getWebSockets().forEach((ws) => this._restoreSocket(ws));
+    if (this.state.storage) {
+      this.ready = this.state.blockConcurrencyWhile(async () => {
+        this.peerManager.restoreState(await this.state.storage.get('relay-state'));
+        restoreSockets();
+      });
+    } else {
+      restoreSockets();
+      this.ready = Promise.resolve();
+    }
   }
 
   async fetch(request) {
+    await this.ready;
     const url = new URL(request.url);
     const wsPath = '/' + this.env.WS_PATH || '/ws';
     if (url.pathname !== wsPath) {
@@ -46,6 +57,7 @@ export class RelayRoom {
   }
 
   async webSocketMessage(ws, message) {
+    await this.ready;
     try {
       let buffer = null;
       if (message instanceof ArrayBuffer) {
@@ -132,6 +144,9 @@ export class RelayRoom {
       if (header.packetType === PacketType.HandShake || header.packetType === PacketType.RpcReq || now - ws.lastPersistedAt >= 60_000) {
         this._persistSocket(ws);
       }
+      if (header.packetType === PacketType.HandShake || header.packetType === PacketType.RpcReq) {
+        await this._persistRoom();
+      }
     } catch (e) {
       console.error({
         event: 'websocket_server_close',
@@ -147,6 +162,7 @@ export class RelayRoom {
   }
 
   async webSocketClose(ws, code, reason, wasClean) {
+    await this.ready;
     const now = Date.now();
     console.log({
       event: 'websocket_close',
@@ -162,9 +178,11 @@ export class RelayRoom {
       idleMs: ws.lastSeen ? now - ws.lastSeen : null,
     });
     this._removeSocket(ws);
+    await this._persistRoom();
   }
 
   async webSocketError(ws, error) {
+    await this.ready;
     console.error({
       event: 'websocket_error',
       peerId: ws.peerId,
@@ -175,6 +193,13 @@ export class RelayRoom {
       error: this._formatError(error),
     });
     this._removeSocket(ws);
+    await this._persistRoom();
+  }
+
+  async _persistRoom() {
+    if (this.state.storage) {
+      await this.state.storage.put('relay-state', this.peerManager.exportState());
+    }
   }
 
   _initSocket(ws, meta = {}) {
@@ -239,6 +264,7 @@ export class RelayRoom {
       const digestHex = ws.groupKey.slice(networkName.length + 1);
       this.peerManager.networkDigestRegistry.set(networkName, digestHex);
       if (meta.peerInfo) this.peerManager.updatePeerInfo(ws.groupKey, ws.peerId, meta.peerInfo);
+      this._persistSocket(ws);
     }
   }
 }

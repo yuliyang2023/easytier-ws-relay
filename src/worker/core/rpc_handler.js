@@ -1,7 +1,6 @@
 import { MY_PEER_ID, PacketType } from './constants.js';
 import { createHeader } from './packet.js';
 import { wrapPacket, randomU64String, sha256 } from './crypto.js';
-import { gzipMaybe, gunzipMaybe, isCompressionAvailable } from './compress.js';
 import { loadProtos } from './protos.js';
 
 // Helper to convert transactionId to proper format for protobuf int64
@@ -129,20 +128,12 @@ function sendRpcResponse(ws, toPeerId, reqRpcPacket, types, responseBodyBytes) {
     console.error(`sendRpcResponse aborted: socket not open (readyState=${ws ? ws.readyState : 'nil'}) toPeer=${toPeerId}`);
     return;
   }
-  const compressEnabled = process.env.EASYTIER_COMPRESS_RPC !== '0';
-  let responseBody = responseBodyBytes;
-  let compressionInfo = { algo: 1, acceptedAlgo: 1 };
-  if (compressEnabled && responseBodyBytes && responseBodyBytes.length > 256 && isCompressionAvailable()) {
-    try {
-      responseBody = gzipMaybe(responseBodyBytes);
-      compressionInfo = { algo: 2, acceptedAlgo: 1 };
-    } catch (e) {
-      console.warn(`Compress rpc response failed: ${e.message}`);
-    }
-  }
+  // Algorithm 2 is Zstandard in EasyTier, not gzip. Until Zstandard is
+  // implemented here, advertise and send only the supported uncompressed form.
+  const compressionInfo = { algo: 1, acceptedAlgo: 1 };
 
   const rpcResponsePayload = {
-    response: responseBody,
+    response: responseBodyBytes,
     error: null,
     runtimeUs: 0,
   };
@@ -237,14 +228,9 @@ export function handleRpcReq(ws, header, payload, types, peerManager) {
     }
     console.log(`handleRpcReq: from=${header.fromPeerId} transactionId=${txIdValue} (${txIdType}) ${txIdDetails} raw=${JSON.stringify(txId)}`);
 
-    if (rpcPacket.compressionInfo && rpcPacket.compressionInfo.algo > 1 && isCompressionAvailable()) {
-      try {
-        rpcPacket.body = gunzipMaybe(rpcPacket.body);
-        rpcPacket.compressionInfo.algo = 1;
-      } catch (e) {
-        console.error(`RpcPacket decompress failed from ${header.fromPeerId}: ${e.message}`);
-        return;
-      }
+    if (rpcPacket.compressionInfo && rpcPacket.compressionInfo.algo > 1) {
+      console.error(`Unsupported RPC compression algorithm ${rpcPacket.compressionInfo.algo} from ${header.fromPeerId}`);
+      return;
     }
     const descriptor = rpcPacket.descriptor;
 
@@ -366,14 +352,9 @@ export function handleRpcResp(ws, header, payload, types, peerManager) {
       txIdDetails = '';
     }
     console.log(`handleRpcResp: transactionId=${txIdValue} (${txIdType}) ${txIdDetails} raw=${JSON.stringify(txId)}`);
-    if (rpcPacket.compressionInfo && rpcPacket.compressionInfo.algo > 1 && isCompressionAvailable()) {
-      try {
-        rpcPacket.body = gunzipMaybe(rpcPacket.body);
-        rpcPacket.compressionInfo.algo = 1;
-      } catch (e) {
-        console.error(`RpcResp decompress failed from ${header.fromPeerId}: ${e.message}`);
-        return;
-      }
+    if (rpcPacket.compressionInfo && rpcPacket.compressionInfo.algo > 1) {
+      console.error(`Unsupported RPC compression algorithm ${rpcPacket.compressionInfo.algo} from ${header.fromPeerId}`);
+      return;
     }
 
     const descriptor = rpcPacket.descriptor || {};
@@ -431,11 +412,8 @@ function handleSyncRouteInfo(ws, fromPeerId, reqRpcPacket, syncReq, types, peerM
   let hasChangedPeers = false;
   if (syncReq.peerInfos && syncReq.peerInfos.items) {
     syncReq.peerInfos.items.forEach(info => {
-      if (info.peerId !== MY_PEER_ID) {
+      if (info.peerId === fromPeerId) {
         if (peerManager.updatePeerInfo(groupKey, info.peerId, info)) hasChangedPeers = true;
-      }
-      if (info.peerId === MY_PEER_ID) {
-        peerManager.updatePeerInfo(groupKey, info.peerId, info);
       }
     });
   }

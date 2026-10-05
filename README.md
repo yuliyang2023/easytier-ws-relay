@@ -130,7 +130,7 @@ easytier-ws-relay/
 
 在 `wrangler.toml` 的 `[vars]` 中配置：
 - `EASYTIER_DISABLE_RELAY`: `"1"` 开启纯 P2P，默认 `"0"`
-- `EASYTIER_COMPRESS_RPC`: `"0"` 关闭 RPC 压缩（调试用），默认 `"1"`
+- RPC 当前使用未压缩格式，并向客户端通告仅支持该格式。EasyTier 的压缩算法 2 是 Zstandard；本实现尚未支持，因此 `EASYTIER_COMPRESS_RPC` 暂不启用压缩。
 
 修改完配置后按正常方式运行 `wrangler dev` 或部署即可生效。
 
