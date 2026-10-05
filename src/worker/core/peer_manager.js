@@ -336,6 +336,9 @@ export class PeerManager {
   updatePeerInfo(groupKey, peerId, info) {
     const infos = this._getPeerInfosMap(groupKey, true);
     const isNew = !infos.has(peerId);
+    const previous = infos.get(peerId);
+    const changed = !previous || !Buffer.from(this.types.RoutePeerInfo.encode(previous).finish())
+      .equals(Buffer.from(this.types.RoutePeerInfo.encode(info).finish()));
     infos.set(peerId, info);
     if (isNew) {
       this.bumpAllPeerConnVersions(groupKey);
@@ -371,6 +374,7 @@ export class PeerManager {
         }
       }
     }
+    return changed;
   }
 
   broadcastRouteUpdate(types, groupKey, excludePeerId, opts = {}) {
@@ -490,13 +494,13 @@ export class PeerManager {
         infos: [{
           key: {
             peerId: MY_PEER_ID,
-            networkName: process.env.EASYTIER_PUBLIC_SERVER_NETWORK_NAME || 'dev-websocket-relay'
+            networkName: ws.domainName || ''
           },
           value: {
             foreignPeerIds: Array.from(allPeers),
             lastUpdate: { seconds: Math.floor(Date.now() / 1000), nanos: 0 },
             version,
-            networkSecretDigest: Buffer.alloc(32),
+            networkSecretDigest: Buffer.from(this.networkDigestRegistry.get(ws.domainName || '') || '', 'hex'),
             myPeerIdForThisNetwork: MY_PEER_ID
           }
         }]

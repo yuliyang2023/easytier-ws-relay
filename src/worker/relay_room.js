@@ -129,7 +129,7 @@ export class RelayRoom {
 
       // Refresh the hibernation attachment after the handshake assigns peer
       // metadata, and periodically thereafter for useful diagnostics.
-      if (header.packetType === PacketType.HandShake || now - ws.lastPersistedAt >= 60_000) {
+      if (header.packetType === PacketType.HandShake || header.packetType === PacketType.RpcReq || now - ws.lastPersistedAt >= 60_000) {
         this._persistSocket(ws);
       }
     } catch (e) {
@@ -201,6 +201,7 @@ export class RelayRoom {
       lastSeen: ws.lastSeen,
       serverSessionId: ws.serverSessionId,
       weAreInitiator: ws.weAreInitiator,
+      peerInfo: this.peerManager._getPeerInfosMap(ws.groupKey, false)?.get(ws.peerId) || null,
     });
   }
 
@@ -234,6 +235,10 @@ export class RelayRoom {
     
     if (ws.peerId && ws.groupKey) {
       this.peerManager.addPeer(ws.peerId, ws);
+      const networkName = ws.domainName || '';
+      const digestHex = ws.groupKey.slice(networkName.length + 1);
+      this.peerManager.networkDigestRegistry.set(networkName, digestHex);
+      if (meta.peerInfo) this.peerManager.updatePeerInfo(ws.groupKey, ws.peerId, meta.peerInfo);
     }
   }
 }

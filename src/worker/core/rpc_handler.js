@@ -428,14 +428,11 @@ function handleSyncRouteInfo(ws, fromPeerId, reqRpcPacket, syncReq, types, peerM
   }
   peerManager.onRouteSessionAck(groupKey, fromPeerId, syncReq.mySessionId, ws.weAreInitiator);
 
-  let hasNewPeers = false;
+  let hasChangedPeers = false;
   if (syncReq.peerInfos && syncReq.peerInfos.items) {
     syncReq.peerInfos.items.forEach(info => {
       if (info.peerId !== MY_PEER_ID) {
-        const infos = peerManager._getPeerInfosMap(groupKey, false);
-        const isNew = !infos || !infos.has(info.peerId);
-        peerManager.updatePeerInfo(groupKey, info.peerId, info);
-        if (isNew) hasNewPeers = true;
+        if (peerManager.updatePeerInfo(groupKey, info.peerId, info)) hasChangedPeers = true;
       }
       if (info.peerId === MY_PEER_ID) {
         peerManager.updatePeerInfo(groupKey, info.peerId, info);
@@ -470,7 +467,7 @@ function handleSyncRouteInfo(ws, fromPeerId, reqRpcPacket, syncReq, types, peerM
     console.error(`Failed to push route update to peer ${fromPeerId}:`, e);
   }
 
-  if (hasNewPeers) {
+  if (hasChangedPeers) {
     try {
       peerManager.broadcastRouteUpdate(types, groupKey, fromPeerId, { forceFull: true });
       console.log(`Successfully broadcast route update for group ${groupKey}`);
