@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {writeSync} from 'node:fs';
-import { RelayRoom } from '../.wrangler/route-regression/worker.js';
+import { RelayRoom } from '../src/worker/relay_room.js';
 const log=console.log;console.log=()=>{};
 const sockets=[];
 function socket(id){const ws={peerId:id,readyState:1,groupKey:'diag:'+ 'ab'.repeat(32),domainName:'diag',serverSessionId:String(id),weAreInitiator:false,sent:[],send(b){this.sent.push(Buffer.from(b));},serializeAttachment(meta){this.meta=structuredClone(meta);},deserializeAttachment(){return this.meta;},close(){throw Error('Unexpected close');}};sockets.push(ws);return ws;}

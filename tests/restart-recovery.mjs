@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { writeSync } from 'node:fs';
-import { RelayRoom } from '../.wrangler/route-regression/worker.js';
+import { RelayRoom } from '../src/worker/relay_room.js';
 
 console.log = () => {};
 const disk = new Map();
